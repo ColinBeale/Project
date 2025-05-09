@@ -1,0 +1,91 @@
+#include <msp430.h>
+#include "adc.h"
+#include "servo.h"
+#include "rgb.h"
+
+enum SystemState currentState = NORMAL;
+unsigned int ignitionFailures = 0;
+
+// Simulated pilot ignition function
+void runIgniterPulse() {
+    P5OUT |= BIT0;         // Turn on igniter LED
+    __delay_cycles(500000); // On for ~0.5 sec
+    P5OUT &= ~BIT0;        // Turn off igniter LED
+}
+
+void initIgniterLED() {
+    P5DIR |= BIT0;   // Set P5.0 as output
+    P5OUT &= ~BIT0;  // Turn off initially
+}
+
+void main(void) {
+    WDTCTL = WDTPW | WDTHOLD;   // Stop watchdog
+
+    // Init peripherals
+    initADC();
+    initServoPWM();
+    initRGBLED();
+    initRGBBlinkTimer();
+    initIgniterLED();
+
+    __enable_interrupt();  // Enable global interrupts
+
+    while (1) {
+        // Read sensor inputs
+        unsigned int pot = readPot();
+        unsigned int thermistor = readThermistor();
+        unsigned int thermocouple = readThermocouple();
+
+        // Convert pot to target temperature range (assume 0–4095 => 0–3300 mV)
+        unsigned int targetTemp = (pot * 3300) / 4095;
+        unsigned int currentTemp = (thermistor * 3300) / 4095;
+
+        // Simulate pilot flame detection (threshold at ~500 mV)
+        int pilotFlameOn = thermocouple > 500;
+
+        // Simulated ignition attempt if flame is off
+        if (!pilotFlameOn) {
+            runIgniterPulse();  // Mimic sparking
+            ignitionFailures++;
+
+            if (ignitionFailures >= 5) {
+                currentState = IGNITION_LOCKOUT;
+                updateRGBLED(currentState);
+                setServoPosition(0);  // Shut off valve
+                __delay_cycles(3000000);  // Placeholder for 5 min lockout
+                ignitionFailures = 0;
+                currentState = NORMAL;
+            } else {
+                currentState = IGNITION_FAIL;
+            }
+
+            updateRGBLED(currentState);
+            continue;  // Skip heating logic until flame is back
+        }
+
+        // Reset failure count if pilot flame detected
+        ignitionFailures = 0;
+
+        // Check for over-temperature
+        if (currentTemp >= 3000) {
+            currentState = OVER_TEMP;
+            updateRGBLED(currentState);
+            setServoPosition(0);  // Close valve
+            continue;
+        }
+
+        // Normal operation: control servo based on set temp
+        if (currentTemp < targetTemp - 100) {
+            setServoPosition(100);  // Fully open
+        } else if (currentTemp > targetTemp + 100) {
+            setServoPosition(0);    // Fully close
+        } else {
+            setServoPosition(50);   // Maintain temp
+        }
+
+        currentState = NORMAL;
+        updateRGBLED(currentState);
+
+       
+    }
+}
